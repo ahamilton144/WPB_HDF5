@@ -71,8 +71,8 @@ for nsamp, nparam in [(30,100), (30000,10), (10,100), (10000,10), (10000000,1), 
                 params_actual[f'means{i}'][f'stds{j}'][f'corr{k}'], params_samp[f'means{i}'][f'stds{j}'][f'corr{k}'] = {}, {}
 
                 ### first get actual params from file
-                with open(f'{data_dir}/data_csv/means{i}_stds{j}_corr{k}.csv', 'r') as f:
-                    paramstrings = [next(f) for _ in range(3)]
+                with open(f'{data_dir}/data_csv/means{i}_stds{j}_corr{k}.csv', 'r') as f_read:
+                    paramstrings = [next(f_read) for _ in range(3)]
                     m1 = float(paramstrings[0].split('[')[1].lstrip().split(' ')[0])
                     m2 = float(paramstrings[0].split(']')[0].rstrip().split(' ')[-1])
                     s1 = float(paramstrings[1].split('[')[1].lstrip().split(' ')[0])
@@ -103,14 +103,18 @@ for nsamp, nparam in [(30,100), (30000,10), (10,100), (10000,10), (10000000,1), 
 
 
     ### now repeat with hdf5 write
-    ### Loop over alternative means, stds, & corrs for 2-variable system.
+    ### Randomly sample alternative means, stds, & corrs for 2-variable system.
     np.random.seed(101)
     mean_samps = np.random.uniform(-1, 1, size=(nparam,2))
     std_samps = np.random.uniform(0, 1, size=(nparam,2))
     corr_samps = np.random.uniform(0, 1, size=nparam)
 
+    #### start timer
     t0 = time.perf_counter()
-    with h5py.File(f'{data_dir}/data_hdf5/data.hdf5', 'w') as f:
+
+    ### Open connection to HDF5 file in write mode via h5py package
+    with h5py.File(f'{data_dir}/data_hdf5/data.hdf5', 'w') as f_write:
+        ### Loop over sampled means, stds, corrs -> within each, randomly sample 2-variable system nsamp times
         for i in range(nparam):
             means = mean_samps[i,:]
             for j in range(nparam):
@@ -120,11 +124,12 @@ for nsamp, nparam in [(30,100), (30000,10), (10,100), (10000,10), (10000000,1), 
                     corrs = np.array([[1, corr], [corr, 1]])
                     ### generate sample for this combination of parameters
                     samps = generate_mvn(means, stds, corrs, nsamp)
-                    ### store sample as hdf5 dataset
-                    f[f'means{i}/stds{j}/corr{k}'] = samps
-                    f[f'means{i}/stds{j}/corr{k}'].attrs['corr'] = [corr]
-                f[f'means{i}/stds{j}'].attrs['stds'] = [stds[0], stds[1]]
-            f[f'means{i}'].attrs['means'] = [means[0], means[1]]
+                    ### store sample as hdf5 dataset in hierarchical structure -> outer group by means, inner group by stds, then separate dataset for separate corr samples within that
+                    f_write[f'means{i}/stds{j}/corr{k}'] = samps
+                    ### store correlation, stds, and means as metadata attributes at their appropriate group/dataset level
+                    f_write[f'means{i}/stds{j}/corr{k}'].attrs['corr'] = [corr]
+                f_write[f'means{i}/stds{j}'].attrs['stds'] = [stds[0], stds[1]]
+            f_write[f'means{i}'].attrs['means'] = [means[0], means[1]]
 
     ### print run time
     dt = time.perf_counter() - t0
@@ -133,24 +138,27 @@ for nsamp, nparam in [(30,100), (30000,10), (10,100), (10000,10), (10000000,1), 
 
 
 
-    ### now loop back over and get read hdf5 to compare actual to sampled params for each set
+    ### now loop back over and read hdf5 to compare actual to sampled params for each set
     t0 = time.perf_counter()
     params_actual, params_samp = {}, {}
 
-    with h5py.File(f'{data_dir}/data_hdf5/data.hdf5', 'r') as f:
+    ### Connect to previously written HDF5 file, in read mode
+    with h5py.File(f'{data_dir}/data_hdf5/data.hdf5', 'r') as f_read:
+        ### loop over previously sampled means, stds, & corrs
         for i in range(nparam):
             params_actual[f'means{i}'], params_samp[f'means{i}'] = {}, {}
             for j in range(nparam):
                 params_actual[f'means{i}'][f'stds{j}'], params_samp[f'means{i}'][f'stds{j}'] = {}, {}
                 for k in range(nparam):
                     params_actual[f'means{i}'][f'stds{j}'][f'corr{k}'], params_samp[f'means{i}'][f'stds{j}'][f'corr{k}'] = {}, {}
-
-                    params_actual[f'means{i}'][f'stds{j}'][f'corr{k}']['means'] = f[f'means{i}'].attrs['means']
-                    params_actual[f'means{i}'][f'stds{j}'][f'corr{k}']['stds'] = f[f'means{i}/stds{j}'].attrs['stds']
-                    params_actual[f'means{i}'][f'stds{j}'][f'corr{k}']['corr'] = f[f'means{i}/stds{j}/corr{k}'].attrs['corr']
-                    params_samp[f'means{i}'][f'stds{j}'][f'corr{k}']['means'] = f[f'means{i}/stds{j}/corr{k}'][...].mean(axis=0)
-                    params_samp[f'means{i}'][f'stds{j}'][f'corr{k}']['means'] = f[f'means{i}/stds{j}/corr{k}'][...].std(axis=0)
-                    params_samp[f'means{i}'][f'stds{j}'][f'corr{k}']['means'] = np.corrcoef(f[f'means{i}/stds{j}/corr{k}'][:, 0], f[f'means{i}/stds{j}/corr{k}'][:, 1])[0, 1]
+                    ### retrieve actual means, stds, & corr params that we used to sample -> stored as metadata attributes
+                    params_actual[f'means{i}'][f'stds{j}'][f'corr{k}']['means'] = f_read[f'means{i}'].attrs['means']
+                    params_actual[f'means{i}'][f'stds{j}'][f'corr{k}']['stds'] = f_read[f'means{i}/stds{j}'].attrs['stds']
+                    params_actual[f'means{i}'][f'stds{j}'][f'corr{k}']['corr'] = f_read[f'means{i}/stds{j}/corr{k}'].attrs['corr']
+                    ### Calculate means, stds, & corrs directly from sampled data arrays
+                    params_samp[f'means{i}'][f'stds{j}'][f'corr{k}']['means'] = f_read[f'means{i}/stds{j}/corr{k}'][...].mean(axis=0)
+                    params_samp[f'means{i}'][f'stds{j}'][f'corr{k}']['means'] = f_read[f'means{i}/stds{j}/corr{k}'][...].std(axis=0)
+                    params_samp[f'means{i}'][f'stds{j}'][f'corr{k}']['means'] = np.corrcoef(f_read[f'means{i}/stds{j}/corr{k}'][:, 0], f_read[f'means{i}/stds{j}/corr{k}'][:, 1])[0, 1]
 
     ### print run time
     dt = time.perf_counter() - t0
